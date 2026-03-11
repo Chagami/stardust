@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Stardust: Planet Creator</title>
+    <style>
+        body { margin: 0; background: #000; overflow: hidden; font-family: 'Courier New', monospace; color: #00ffff; }
+        #container { width: 100vw; height: 100vh; position: fixed; }
+        video { display: none; }
+        
+        #ui-layer {
+            position: absolute; top: 20px; left: 20px; z-index: 100;
+            background: rgba(0,0,0,0.7); padding: 20px; border: 1px solid #00ffff;
+            display: none; width: 250px;
+        }
+        .slider-group { margin-bottom: 15px; }
+        input[type=range] { width: 100%; cursor: pointer; accent-color: #00ffff; }
+        
+        #start-btn { 
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            padding: 20px 40px; background: none; border: 2px solid #00ffff;
+            color: #00ffff; cursor: pointer; z-index: 1000;
+        }
+    </style>
+</head>
+<body>
+
+    <button id="start-btn">BEGIN PLANETARY GENESIS</button>
+
+    <div id="ui-layer">
+        <h3>PLANETARY COMPOSITION</h3>
+        <div class="slider-group">
+            <label>OXYGEN (Oceans)</label>
+            <input type="range" id="o2-slider" min="0" max="100" value="65">
+        </div>
+        <div class="slider-group">
+            <label>CARBON (Land)</label>
+            <input type="range" id="c-slider" min="0" max="100" value="18">
+        </div>
+        <div class="slider-group">
+            <label>HYDROGEN (Clouds)</label>
+            <input type="range" id="h-slider" min="0" max="100" value="10">
+        </div>
+    </div>
+
+    <div id="container"></div>
+    <video id="vid" playsinline></video>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
+
+    <script>
+        const video = document.getElementById('vid');
+        const startBtn = document.getElementById('start-btn');
+        const uiLayer = document.getElementById('ui-layer');
+
+        // --- 1. THREE.JS ENGINE ---
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.getElementById('container').appendChild(renderer.domElement);
+        camera.position.z = 5;
+
+        // --- 2. PLANET SHADER ---
+        // This shader creates land and water based on noise and input variables
+        const planetShader = {
+            uniforms: {
+                uTime: { value: 0 },
+                uWaterLevel: { value: 0.65 },
+                uLandDensity: { value: 0.18 },
+                uCloudDensity: { value: 0.10 }
+            },
+            vertexShader: `
+                varying vec2 vUv;
+                varying vec3 vNormal;
+                void main() {
+                    vUv = uv;
+                    vNormal = normalize(normalMatrix * normal);
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                }
+            `,
+            fragmentShader: `
+                uniform float uTime;
+                uniform float uWaterLevel;
+                uniform float uLandDensity;
+                varying vec2 vUv;
+                varying vec3 vNormal;
+
+                // Simple noise function
+                float noise(vec2 p) {
+                    return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+                }
+
+                void main() {
+                    float n = noise(vUv * 5.0 + uTime * 0.1);
+                    vec3 color = vec3(0.05, 0.05, 0.2); // Deep Space Blue
+                    
+                    if (n < uWaterLevel) {
+                        color = vec3(0.0, 0.3, 0.6); // Ocean
+                    } else if (n < uWaterLevel + uLandDensity) {
+                        color = vec3(0.2, 0.5, 0.2); // Vegetation/Land
+                    }
+                    
+                    float lighting = dot(vNormal, normalize(vec3(5.0, 5.0, 5.0)));
+                    gl_FragColor = vec4(color * lighting, 1.0);
+                }
+            `
+        };
+
+        const planetGeo = new THREE.SphereGeometry(2, 64, 64);
+        const planetMat = new THREE.ShaderMaterial(planetShader);
+        const planet = new THREE.Mesh(planetGeo, planetMat);
+        planet.visible = false;
+        scene.add(planet);
+
+        // --- 3. THE PARTICLE SOUP (Transition) ---
+        const particleCount = 10000;
+        const particlesGeo = new THREE.BufferGeometry();
+        const posArray = new Float32Array(particleCount * 3);
+        for(let i=0; i<particleCount; i++) {
+            posArray.set([(Math.random()-0.5)*15, (Math.random()-0.5)*10, (Math.random()-0.5)*2], i*3);
+        }
+        particlesGeo.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+        const particlesMat = new THREE.PointsMaterial({ color: 0x00ffff, size: 0.02, transparent: true });
+        const particleSystem = new THREE.Points(particlesGeo, particlesMat);
+        scene.add(particleSystem);
+
+        // --- 4. INTERACTION & TRANSITION ---
+        function triggerGenesis() {
+            gsap.to(particleSystem.material, { opacity: 0, duration: 2 });
+            planet.visible = true;
+            planet.scale.set(0,0,0);
+            gsap.to(planet.scale, { x: 1, y: 1, z: 1, duration: 3, ease: "elastic.out(1, 0.5)" });
+            uiLayer.style.display = 'block';
+        }
+
+        // Connect Sliders to Shader
+        document.getElementById('o2-slider').oninput = (e) => {
+            planetMat.uniforms.uWaterLevel.value = e.target.value / 100;
+        };
+        document.getElementById('c-slider').oninput = (e) => {
+            planetMat.uniforms.uLandDensity.value = e.target.value / 100;
+        };
+
+        // --- 5. RENDER LOOP ---
+        function animate(t) {
+            requestAnimationFrame(animate);
+            planetMat.uniforms.uTime.value = t * 0.001;
+            planet.rotation.y += 0.002;
+            renderer.render(scene, camera);
+        }
+
+        startBtn.addEventListener('click', () => {
+            startBtn.style.display = 'none';
+            animate();
+            setTimeout(triggerGenesis, 3000); // Trigger after 3s of scanning
+        });
+
+        window.addEventListener('keydown', (e) => { if(e.code === "Space") triggerGenesis(); });
+    </script>
+</body>
+</html>
